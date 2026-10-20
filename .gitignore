@@ -1,0 +1,17 @@
+﻿.venv/
+.env
+allure-results/
+*.storage.json
+__pycache__/
+.pytest_cache/
+test-results/
+html-report/
+playwright-report/
+node_modules/
+junit/
+
+# Private AI policies - not published; forks create their own (see README)
+agents/
+guardrails/
+skills/
+REQUIREMENTS.md

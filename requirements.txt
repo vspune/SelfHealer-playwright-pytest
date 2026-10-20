@@ -1,0 +1,12 @@
+# Test framework
+pytest
+pytest-playwright
+playwright
+pytest-xdist
+
+# Reporting
+pytest-html
+allure-pytest
+
+# Config / secrets from .env
+python-dotenv

@@ -1,0 +1,77 @@
+// Multibranch pipeline (Script Path: ci/Jenkinsfile), Windows agent.
+//  - Every commit (GitHub webhook) runs the full suite on Chromium and Firefox.
+//  - The branch named in NIGHTLY_BRANCH also runs on a nightly cron.
+// Credentials to create in Jenkins:
+//  - orangehrm-admin             (Username with password)  -> VALID_USERNAME / VALID_PASSWORD
+//  - orangehrm-invalid-password  (Secret text)             -> INVALID_PASSWORD
+
+def NIGHTLY_BRANCH = 'nightly'
+
+pipeline {
+    agent any
+
+    options {
+        timeout(time: 60, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        disableConcurrentBuilds()
+    }
+
+    triggers {
+        // Empty string = no cron on other branches; they run on commit only.
+        cron(env.BRANCH_NAME == NIGHTLY_BRANCH ? 'H 2 * * *' : '')
+    }
+
+    stages {
+        stage('Setup') {
+            steps {
+                bat 'python -m venv .venv'
+                bat '.venv\\Scripts\\python -m pip install -r requirements.txt'
+                bat '.venv\\Scripts\\python -m playwright install chromium firefox'
+            }
+        }
+
+        stage('Test') {
+            matrix {
+                axes {
+                    axis {
+                        name 'BROWSER'
+                        values 'chromium', 'firefox'
+                    }
+                }
+                stages {
+                    stage('Run') {
+                        steps {
+                            withCredentials([
+                                usernamePassword(credentialsId: 'orangehrm-admin',
+                                                 usernameVariable: 'VALID_USERNAME',
+                                                 passwordVariable: 'VALID_PASSWORD'),
+                                string(credentialsId: 'orangehrm-invalid-password',
+                                       variable: 'INVALID_PASSWORD')
+                            ]) {
+                                // Per-browser output paths so the two runs don't overwrite each other.
+                                bat """
+                                    .venv\\Scripts\\python -m pytest tests ^
+                                      --browser ${BROWSER} ^
+                                      --html=html-report/${BROWSER}.html ^
+                                      --alluredir=allure-results/${BROWSER} ^
+                                      --junitxml=junit/${BROWSER}.xml
+                                """
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            junit allowEmptyResults: true, testResults: 'junit/*.xml'
+            archiveArtifacts artifacts: 'html-report/**, test-results/**', allowEmptyArchive: true
+            allure includeProperties: false, results: [
+                [path: 'allure-results/chromium'],
+                [path: 'allure-results/firefox']
+            ]
+        }
+    }
+}
