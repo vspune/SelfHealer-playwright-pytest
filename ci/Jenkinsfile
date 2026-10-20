@@ -1,9 +1,10 @@
 // Multibranch pipeline (Script Path: ci/Jenkinsfile), Windows agent.
 //  - Every commit (GitHub webhook) runs the full suite on Chromium and Firefox.
 //  - The branch named in NIGHTLY_BRANCH also runs on a nightly cron.
-// Credentials to create in Jenkins:
-//  - orangehrm-admin             (Username with password)  -> VALID_USERNAME / VALID_PASSWORD
-//  - orangehrm-invalid-password  (Secret text)             -> INVALID_PASSWORD
+// Credentials to create in Jenkins (kind "Secret text"):
+//  - orangehrm-valid-username    -> VALID_USERNAME
+//  - orangehrm-valid-password    -> VALID_PASSWORD
+//  - orangehrm-invalid-password  -> INVALID_PASSWORD
 
 def NIGHTLY_BRANCH = 'nightly'
 
@@ -42,11 +43,9 @@ pipeline {
                     stage('Run') {
                         steps {
                             withCredentials([
-                                usernamePassword(credentialsId: 'orangehrm-admin',
-                                                 usernameVariable: 'VALID_USERNAME',
-                                                 passwordVariable: 'VALID_PASSWORD'),
-                                string(credentialsId: 'orangehrm-invalid-password',
-                                       variable: 'INVALID_PASSWORD')
+                                string(credentialsId: 'orangehrm-valid-username', variable: 'VALID_USERNAME'),
+                                string(credentialsId: 'orangehrm-valid-password', variable: 'VALID_PASSWORD'),
+                                string(credentialsId: 'orangehrm-invalid-password', variable: 'INVALID_PASSWORD')
                             ]) {
                                 // Per-browser output paths so the two runs don't overwrite each other.
                                 bat """

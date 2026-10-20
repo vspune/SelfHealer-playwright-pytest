@@ -215,8 +215,9 @@ One pipeline: `ci/Jenkinsfile`, used by a **multibranch pipeline** job on a **Wi
 - Change the cron branch name or time at the top of `ci/Jenkinsfile` (`NIGHTLY_BRANCH`, `cron(...)`).
 - Each browser writes its own reports: `html-report/<browser>.html`, `allure-results/<browser>`,
   `junit/<browser>.xml`, so the two runs never overwrite each other.
-- Jenkins credentials to create: `orangehrm-admin` (username + password) and
-  `orangehrm-invalid-password` (secret text). The pipeline exposes them as the environment
+- Jenkins credentials to create (kind *Secret text*): `orangehrm-valid-username` → `VALID_USERNAME`,
+  `orangehrm-valid-password` → `VALID_PASSWORD`, `orangehrm-invalid-password` → `INVALID_PASSWORD`.
+  The pipeline exposes them as the environment
   variables `config.py` reads; no `.env` is needed on the agent.
 - **Public repo:** in the Jenkins GitHub source, set trust for pull requests from forks to *Nobody* (or *Collaborators*), so a fork's Jenkinsfile can never run with your credentials.
 - Agent needs: Python 3.10+ on `PATH`, Git, and the Jenkins Allure plugin.
