@@ -367,3 +367,7 @@ redistribute or reuse the code, in whole or in part, without written permission.
 ## Target application
 
 OrangeHRM demo: https://opensource-demo.orangehrmlive.com (Login, Dashboard, Admin → User Management).
+
+**Allure report**
+<img width="1115" height="911" alt="image" src="https://github.com/user-attachments/assets/f243ec41-5e24-42c9-9f8c-8161cab2dc0b" />
+
