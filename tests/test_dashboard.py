@@ -67,7 +67,7 @@ def test_tc2_left_menu_items_appear_in_expected_order(
     expect(side_menu.menu_items).to_have_text(expected_item_names)
 
 
-@pytest.mark.role("ess")
+@pytest.mark.role("normal")
 @pytest.mark.left_menu
 @pytest.mark.dashboard
 @pytest.mark.regression

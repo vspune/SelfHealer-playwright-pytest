@@ -11,7 +11,7 @@ screenshots, and a Jenkins pipeline. Target app: the OrangeHRM demo.
 
 - Page Objects take only `page`: `BasePage(page)` → `LoginPage`, `DashboardPage`, …
 - One `config.py` for URLs, page paths, credentials and per-role logins
-- `@pytest.mark.role("ess")` + `pytest --role ess` to run as a given user role
+- `@pytest.mark.role("normal")` + `pytest --role normal` to run as a given user role
 - Parallel (`-n`), cross-browser (`--browser`), markers for suite / priority / module
 - Failure screenshots and logs attached to the Allure and HTML reports
 - Jenkins: runs on every commit and nightly, on Chromium and Firefox
@@ -68,16 +68,30 @@ Optional / later:
 
 ## Configuration, secrets and test data
 
-All URLs and logins are in **one place: `config.py`** (project root).
+Everything about environments is in **one file: `config.py`**.
 
-| What | Where |
-|---|---|
-| Base URL and page paths (`LOGIN_PATH`, `DASHBOARD_PATH`, `ADMIN_USERS_PATH`) | `config.py` (not secret) |
-| Credentials (`VALID_USERNAME`, `VALID_PASSWORD`, `INVALID_PASSWORD`) | local `.env` (never committed; Jenkins Credentials in CI), read by `config.py` |
-| Logins per role (`config.USERS`: `admin`, `ess`) | `config.py` — `ess` reuses the admin login until a real normal user exists |
+| Environment | URL | Logins (roles) | Tag Jenkins runs |
+|---|---|---|---|
+| `qa` (default) | the demo URL, set in `config.py` | `admin`, `normal` | `smoke` |
+| `uat` | `TODO` — set in `config.py` | `normal` | `regression` |
+| `preprod` | `TODO` — set in `config.py` | `normal` | `regression` |
 
-- Copy `.env.example` to `.env` and fill in the three credential values.
-- Tests, pages and test cases refer to values **by name** (e.g. `valid_username` → `VALID_USERNAME`), never raw values.
+- Page paths (`LOGIN_PATH`, `DASHBOARD_PATH`, `ADMIN_USERS_PATH`) are in `config.py` too.
+- Logins are listed in `config.py` by the **names** of the variables that hold them, e.g.
+  `QA_ADMIN_USERNAME` / `QA_ADMIN_PASSWORD`, `UAT_NORMAL_USERNAME`, `PREPROD_NORMAL_PASSWORD`. The
+  **values** live in a local `.env` (copy `.env.example`; never committed) and in Jenkins Credentials in CI.
+- `QA normal` reuses the admin variables until a real normal QA user exists (see the `TODO` in `config.py`).
+- Choose the environment with **`--env qa | uat | preprod`** (default `qa`), the role with
+  **`--role admin | normal`**, and the tests with **`--marker <tag>`** (same as `-m`). For example:
+  ```bash
+  python -m pytest --env qa --role admin --marker smoke
+  python -m pytest --env uat --role normal --marker regression
+  ```
+- The tag per environment (`qa` → `smoke`, `uat` / `preprod` → `regression`) is set in the `Jenkinsfile`;
+  locally you choose it yourself with `--marker`.
+- **This repository is public.** Never commit real credentials, tokens or internal URLs: logins are
+  referenced by variable name only, `.env` is git-ignored, and Jenkins keeps the real values as Credentials.
+- Tests, pages and test cases refer to values **by name**, never raw values.
 - Session / storage-state files (`*.storage.json`) are never committed.
 
 ### Fixtures and the `page`
@@ -92,27 +106,56 @@ Page classes never create a `Page`; they receive it in `__init__`.
 `logged_in_page` logs in as **admin** by default. Tag a test to run as another role:
 
 ```python
-@pytest.mark.role("ess")
+@pytest.mark.role("normal")
 def test_something(logged_in_page): ...
 ```
 
-The tag selects the login from `config.USERS`. An unknown role fails with `KeyError`.
+The role is looked up in the chosen environment's logins in `config.py`. A test whose role has no
+login in that environment (e.g. an `admin` test on `uat`) is skipped automatically.
 
-**Example in use:** `test_tc3_dashboard_is_the_only_active_menu_item` in
-`tests/test_dashboard.py` is tagged `@pytest.mark.role("ess")`, so it runs as the normal user
-(currently the same login as admin). All other tests run as admin. Run only it with:
+**Example in use:** `test_tc3_dashboard_is_the_only_active_menu_item` in `tests/test_dashboard.py`
+is tagged `@pytest.mark.role("normal")`. All other tests run as admin. Run only it with:
 
 ```bash
-pytest tests/test_dashboard.py::test_tc3_dashboard_is_the_only_active_menu_item
-pytest --role ess           # every test tagged @pytest.mark.role("ess")
+pytest --role normal        # every test tagged @pytest.mark.role("normal")
 ```
 
-`--role <name>` is a custom option (`tests/conftest.py`) that keeps only tests whose
-`role("<name>")` tag matches. (`-m` can't do this: it matches marker names, not their arguments.)
-It combines with other filters, e.g. `pytest --role ess -m smoke`.
+`--role <name>` is a custom option (`tests/conftest.py`); `-m` can't do this because it matches
+marker names, not their arguments. It combines with other filters, e.g. `pytest --role normal -m smoke`.
 
-When a real normal user exists, change only the `ess` entry in `config.USERS` — the tagged tests
-need no edits.
+### Examples: admin and normal (non-admin) users
+
+Illustrative tests (the roles and their logins are defined per environment in `config.py`):
+
+```python
+# No role tag = admin
+@pytest.mark.smoke
+def test_admin_can_open_user_management(logged_in_page, side_menu, user_management_page):
+    user_management_page.open_from_menu(side_menu)
+
+# Runs as the normal (non-admin) user
+@pytest.mark.role("normal")
+@pytest.mark.regression
+def test_normal_user_sees_dashboard(logged_in_page, dashboard_page):
+    dashboard_page.wait_until_loaded()
+```
+
+Commands (same in PowerShell, bash and Git Bash):
+
+```bash
+python -m pytest                                            # QA, every test (admin and normal)
+python -m pytest --env qa --role admin                      # QA, admin tests only (untagged ones)
+python -m pytest --env qa --role normal                     # QA, normal-user tests only
+python -m pytest --env qa --role admin --marker smoke       # QA, admin smoke tests
+python -m pytest --env qa --marker "smoke and admin"        # any tag expression works
+python -m pytest --env uat --role normal --marker regression       # UAT, regression tests as the normal user
+python -m pytest --env preprod --role normal --marker regression   # PreProd, regression tests as the normal user
+```
+
+(`uat` and `preprod` need their URL set in `config.py` first.)
+
+On `uat` and `preprod` only the `normal` login exists in `config.py`, so tests that need `admin` are
+skipped there automatically.
 
 ### Logging and failure screenshots
 
@@ -122,6 +165,29 @@ need no edits.
 - On any failed test (including a failed login fixture) a full-page screenshot is attached to the
   **Allure** and **HTML** reports (`utilities/screenshot.py`, hooked in `tests/conftest.py`).
   Traces are kept on failure (`--tracing=retain-on-failure`).
+
+### Reports
+
+Every run writes reports; a failed test also gets a full-page screenshot attached.
+
+| Report | Where (local) | Where (Jenkins) |
+|---|---|---|
+| HTML (self-contained) | `html-report/report.html` | `html-report/<env>-<browser>.html`, archived with the build |
+| Allure results | `allure-results/` (`allure serve allure-results`, needs the Allure CLI) | `allure-results/<env>-<browser>`, shown by the Allure plugin on the build page |
+| JUnit XML | — | `junit/<env>-<browser>.xml`, drives the test trend graph |
+| Traces (failures only) | `test-results/` | archived with the build |
+
+**E-mail report (Jenkins):** after each run the `Jenkinsfile` e-mails the result (status, which
+environment + browser runs, links to the build and the Allure report, the HTML reports attached)
+when a build is **not successful**, and after **every nightly run**. Passing commit builds send nothing.
+
+To switch it on (nothing secret goes in this public repo):
+1. Install the **Email Extension** plugin and set up SMTP (Manage Jenkins → System).
+2. Add a global variable `REPORT_RECIPIENTS` (Manage Jenkins → System → Global properties →
+   Environment variables) with the comma-separated addresses.
+
+If either is missing, the e-mail step is skipped and the build result is not affected.
+Slack / Teams notifications are not built.
 
 ---
 
@@ -150,13 +216,25 @@ pytest tests/test_login.py               # one file
 pytest tests/test_login.py::test_tc1_x   # one test
 pytest --headed                          # see the browser
 pytest --browser firefox                 # pick the browser (default chromium)
-pytest --role ess                        # only tests tagged @pytest.mark.role("ess")
+pytest --role normal                     # only tests tagged @pytest.mark.role("normal")
 pytest tests/test_dashboard.py -n 2 --browser chromium --headed   # 2 parallel workers, visible
 pytest --html=html-report/report.html --self-contained-html
 pytest --alluredir=allure-results
 pytest -n 2 -m p1 tests/admin/test_user_management.py
 allure serve allure-results              # needs Allure CLI
 ```
+
+### Local vs Jenkins
+
+| | On your machine | In Jenkins |
+|---|---|---|
+| Who runs the tests | **You**, by typing the command | **The `Jenkinsfile`**, automatically on a trigger (commit, nightly cron, or a manual build) |
+| Choosing the environment | `--env uat` (default `qa`) | The `Jenkinsfile` passes `--env <name>` for each stage |
+| Choosing the tests | `--marker <tag>` (or `-m`) and `--role` | The `Jenkinsfile` passes `--marker` (your `MARKER` parameter, or the environment's tag) and `--role` |
+| Secrets | your local `.env` | Jenkins Credentials |
+
+So the commands in this README are for running locally; in Jenkins nobody types them, because the
+`Jenkinsfile` builds the same `pytest` command itself.
 
 ### Browsers
 
@@ -169,7 +247,7 @@ pytest --browser chromium --browser firefox      # run the suite on both
 pytest --browser webkit
 ```
 
-Verified: the `ess`-tagged dashboard test passes on Firefox. The full suite has only been run on Chromium.
+Verified: the `normal`-tagged dashboard test passes on Firefox. The full suite has only been run on Chromium.
 
 > If `pytest` fails with *"Fatal error in launcher"*, the virtual environment was moved/copied and
 > its launchers point at the old path. Run `python -m pytest ...` instead, or recreate the venv
@@ -205,23 +283,48 @@ Note: `-m` filters on tags such as `smoke`; the `role` marker only selects the l
 ## Jenkins (CI)
 
 One pipeline: `ci/Jenkinsfile`, used by a **multibranch pipeline** job on a **Windows** agent
-(Script Path `ci/Jenkinsfile`, source = this GitHub repo).
+(Script Path `ci/Jenkinsfile`, source = this GitHub repo, branch scan every 2 minutes).
 
-| Trigger | When | What runs |
+Stages run in order and each runs **only if the previous one passed**.
+
+```text
+Commit:   QA (smoke)
+Nightly:  UAT (regression)  ──pass──►  PREPROD (regression)
+```
+
+| Trigger | Stages that run | Tag |
 |---|---|---|
-| Commit / push | GitHub webhook, any branch | Full suite on **Chromium and Firefox** (in parallel) |
-| Nightly cron | Only on the `nightly` branch, `H 2 * * *` (about 2 AM) | Same |
+| Commit / push | `QA` | `smoke` |
+| Nightly cron (`nightly` branch, `H 2 * * *`, about 2 AM) | `UAT`, then `PREPROD` only if UAT passed | `regression` |
+| Manual **Build with Parameters** | `QA` only, or the single `TARGET_ENV` you pick | `MARKER` you type, or the environment's tag |
 
+Inside each stage the tests run on **Chromium and Firefox** in parallel.
+
+- **Parameters:** `TARGET_ENV` (`auto` = by trigger, or `qa` / `uat` / `preprod`), `MARKER` (a pytest `-m` expression, e.g.
+  `smoke`, `p0`, `smoke and admin`; overrides the environment's tag) and `ROLE` (e.g. `normal`). They appear
+  after the first build that runs this Jenkinsfile.
+- **Where the logic lives:** which environment runs, and its tag, is decided in `ci/Jenkinsfile`;
+  each environment's URL and logins are only in `config.py`.
+- **Gating:** in the nightly run, `PREPROD` runs only if `UAT` passed (Jenkins stops after a failed stage).
+- **Deployment is not part of this pipeline.** A separate deploy pipeline (owned by the dev / DevOps
+  team) puts the build on QA, UAT and pre-prod. This pipeline only **verifies** an environment that is
+  already deployed. A deploy job can start it for a given environment with the `TARGET_ENV`
+  parameter, e.g. `curl -X POST -u <user>:<api-token> ".../job/SelfHealer-playwright-pytest/job/master/buildWithParameters?TARGET_ENV=qa"`.
+- **No tests selected** (for example no test carries the tag) is not a failure.
+- Each run writes its own reports: `html-report/<env>-<browser>.html`,
+  `allure-results/<env>-<browser>`, `junit/<env>-<browser>.xml`.
+- **Jenkins credentials** (kind *Secret text*): `orangehrm-invalid-password` → `INVALID_PASSWORD`;
+  `orangehrm-valid-username` / `orangehrm-valid-password` → `QA_ADMIN_USERNAME` / `QA_ADMIN_PASSWORD`;
+  `orangehrm-uat-normal-username` / `-password` → `UAT_NORMAL_USERNAME` / `UAT_NORMAL_PASSWORD`;
+  `orangehrm-preprod-normal-username` / `-password` → `PREPROD_NORMAL_USERNAME` / `PREPROD_NORMAL_PASSWORD`.
+  No `.env` is needed on the agent.
 - Change the cron branch name or time at the top of `ci/Jenkinsfile` (`NIGHTLY_BRANCH`, `cron(...)`).
-- Each browser writes its own reports: `html-report/<browser>.html`, `allure-results/<browser>`,
-  `junit/<browser>.xml`, so the two runs never overwrite each other.
-- Jenkins credentials to create (kind *Secret text*): `orangehrm-valid-username` → `VALID_USERNAME`,
-  `orangehrm-valid-password` → `VALID_PASSWORD`, `orangehrm-invalid-password` → `INVALID_PASSWORD`.
-  The pipeline exposes them as the environment
-  variables `config.py` reads; no `.env` is needed on the agent.
-- **Public repo:** in the Jenkins GitHub source, set trust for pull requests from forks to *Nobody* (or *Collaborators*), so a fork's Jenkinsfile can never run with your credentials.
+- **Public repo:** in the Jenkins GitHub source, set trust for pull requests from forks to *Nobody*
+  (or *Collaborators*), so a fork's Jenkinsfile can never run with your credentials.
 - Agent needs: Python 3.10+ on `PATH`, Git, and the Jenkins Allure plugin.
 - Setup stage: creates `.venv`, installs `requirements.txt`, runs `playwright install chromium firefox`.
+- Not built yet: the `uat` and `preprod` URLs (the OrangeHRM demo has no
+  UAT or production).
 
 ---
 

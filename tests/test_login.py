@@ -7,6 +7,9 @@ from pages.dashboard_page import DashboardPage
 from pages.login_page import LoginPage
 
 
+pytestmark = [pytest.mark.login, pytest.mark.smoke]
+
+
 def _expect_input_value(locator: Locator, expected: str, field_name: str) -> None:
     if locator.input_value() != expected:
         pytest.fail(

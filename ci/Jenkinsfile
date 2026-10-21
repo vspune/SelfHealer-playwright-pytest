@@ -1,15 +1,110 @@
 // Multibranch pipeline (Script Path: ci/Jenkinsfile), Windows agent.
-//  - Every commit (GitHub webhook) runs the full suite on Chromium and Firefox.
-//  - The branch named in NIGHTLY_BRANCH also runs on a nightly cron.
+//
+// Promotion pipeline: stages run in order and each runs ONLY if the previous one passed.
+//   QA (commit)      UAT  ->  PREPROD (nightly)
+// Which stages run, by trigger (TARGET_ENV parameter = "auto"; each stage runs pytest with --env <name>):
+//   Commit (found by the job's 2-minute branch scan) -> QA
+//   Nightly cron (branch NIGHTLY_BRANCH)             -> UAT, then PREPROD only if UAT passed
+//   Manual "Build with Parameters"                   -> QA (or the single TARGET_ENV you pick)
+// Each environment runs its own tag (qa = smoke, uat / preprod = regression; see pytestFilters),
+// on Chromium and Firefox in parallel. A MARKER typed in "Build with Parameters" overrides the tag;
+// ROLE limits the run to one role.
+//
 // Credentials to create in Jenkins (kind "Secret text"):
-//  - orangehrm-valid-username    -> VALID_USERNAME
-//  - orangehrm-valid-password    -> VALID_PASSWORD
-//  - orangehrm-invalid-password  -> INVALID_PASSWORD
+//   orangehrm-invalid-password                                  -> INVALID_PASSWORD
+//   orangehrm-valid-username / orangehrm-valid-password         -> QA_ADMIN_USERNAME / QA_ADMIN_PASSWORD
+//   orangehrm-uat-normal-username / -password                   -> UAT_NORMAL_USERNAME / UAT_NORMAL_PASSWORD
+//   orangehrm-preprod-normal-username / -password               -> PREPREPROD_NORMAL_USERNAME / PREPREPROD_NORMAL_PASSWORD
 
 def NIGHTLY_BRANCH = 'nightly'
 
+// Environments to run for this build, in promotion order.
+def targetEnvs() {
+    def chosen = params.TARGET_ENV ?: 'auto'
+    if (chosen != 'auto') { return [chosen] }
+    if (currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause')) { return ['uat', 'preprod'] }
+    return ['qa']
+}
+
+// Run one environment on both browsers in parallel; fails if any run fails.
+def runEnv(String envName) {
+    def runs = [:]
+    def tags = []
+    def filters = pytestFilters(envName)
+    for (b in ['chromium', 'firefox']) {
+        def browser = b
+        def tag = "${envName}-${browser}"
+        tags << tag
+        runs[tag] = {
+            withCredentials(credentialBindings(envName)) {
+                // Own report folders per environment + browser; exit code 5 (no tests
+                // selected, e.g. no test has the tag) is not a failure.
+                bat """
+                    .venv\\Scripts\\python -m pytest tests --env ${envName}${filters} ^
+                      --browser ${browser} ^
+                      --html=html-report/${tag}.html ^
+                      --alluredir=allure-results/${tag} ^
+                      --junitxml=junit/${tag}.xml
+                    if %ERRORLEVEL% EQU 5 exit /b 0
+                """
+            }
+        }
+    }
+    env.RUN_TAGS = ((env.RUN_TAGS ? env.RUN_TAGS + ',' : '') + tags.join(','))
+    echo "Running ${envName}: ${tags} with filters:${filters}"
+    parallel runs
+}
+
+// Extra pytest arguments: a typed MARKER wins, otherwise the tag of the environment.
+def pytestFilters(String envName) {
+    def tags = [qa: 'smoke', uat: 'regression', preprod: 'regression']
+    def marker = (params.MARKER ?: '').trim() ?: tags[envName]
+    def role = (params.ROLE ?: '').trim()
+    def args = ''
+    if (marker) {
+        if (!(marker ==~ /[A-Za-z0-9_ ()]+/)) { error("Invalid MARKER: ${marker}") }
+        args += " --marker \"${marker}\""
+    }
+    if (role) {
+        if (!(role ==~ /[a-z_]+/)) { error("Invalid ROLE: ${role}") }
+        args += " --role ${role}"
+    }
+    return args
+}
+
+// Credentials exposed as environment variables for one environment.
+def credentialBindings(String envName) {
+    def bindings = [string(credentialsId: 'orangehrm-invalid-password', variable: 'INVALID_PASSWORD')]
+    if (envName == 'qa') {
+        bindings += [
+            string(credentialsId: 'orangehrm-valid-username', variable: 'QA_ADMIN_USERNAME'),
+            string(credentialsId: 'orangehrm-valid-password', variable: 'QA_ADMIN_PASSWORD')
+        ]
+    } else if (envName == 'uat') {
+        bindings += [
+            string(credentialsId: 'orangehrm-uat-normal-username', variable: 'UAT_NORMAL_USERNAME'),
+            string(credentialsId: 'orangehrm-uat-normal-password', variable: 'UAT_NORMAL_PASSWORD')
+        ]
+    } else if (envName == 'preprod') {
+        bindings += [
+            string(credentialsId: 'orangehrm-preprod-normal-username', variable: 'PREPROD_NORMAL_USERNAME'),
+            string(credentialsId: 'orangehrm-preprod-normal-password', variable: 'PREPROD_NORMAL_PASSWORD')
+        ]
+    }
+    return bindings
+}
+
 pipeline {
     agent any
+
+    parameters {
+        choice(name: 'TARGET_ENV', choices: ['auto', 'qa', 'uat', 'preprod'],
+               description: 'auto = by trigger (commit: qa, nightly: uat > preprod, manual: qa). Or pick one environment.')
+        string(name: 'MARKER', defaultValue: '',
+               description: 'pytest -m expression, e.g. smoke, regression, p0, "smoke and admin". Empty = qa: smoke, uat / preprod: regression')
+        string(name: 'ROLE', defaultValue: '',
+               description: 'Only tests tagged @pytest.mark.role("<name>"), e.g. normal. Empty = all roles')
+    }
 
     options {
         timeout(time: 60, unit: 'MINUTES')
@@ -31,35 +126,19 @@ pipeline {
             }
         }
 
-        stage('Test') {
-            matrix {
-                axes {
-                    axis {
-                        name 'BROWSER'
-                        values 'chromium', 'firefox'
-                    }
-                }
-                stages {
-                    stage('Run') {
-                        steps {
-                            withCredentials([
-                                string(credentialsId: 'orangehrm-valid-username', variable: 'VALID_USERNAME'),
-                                string(credentialsId: 'orangehrm-valid-password', variable: 'VALID_PASSWORD'),
-                                string(credentialsId: 'orangehrm-invalid-password', variable: 'INVALID_PASSWORD')
-                            ]) {
-                                // Per-browser output paths so the two runs don't overwrite each other.
-                                bat """
-                                    .venv\\Scripts\\python -m pytest tests ^
-                                      --browser ${BROWSER} ^
-                                      --html=html-report/${BROWSER}.html ^
-                                      --alluredir=allure-results/${BROWSER} ^
-                                      --junitxml=junit/${BROWSER}.xml
-                                """
-                            }
-                        }
-                    }
-                }
-            }
+        stage('QA') {
+            when { expression { targetEnvs().contains('qa') } }
+            steps { script { runEnv('qa') } }
+        }
+
+        stage('UAT') {
+            when { expression { targetEnvs().contains('uat') } }
+            steps { script { runEnv('uat') } }
+        }
+
+        stage('PREPROD') {
+            when { expression { targetEnvs().contains('preprod') } }
+            steps { script { runEnv('preprod') } }
         }
     }
 
@@ -67,10 +146,35 @@ pipeline {
         always {
             junit allowEmptyResults: true, testResults: 'junit/*.xml'
             archiveArtifacts artifacts: 'html-report/**, test-results/**', allowEmptyArchive: true
-            allure includeProperties: false, results: [
-                [path: 'allure-results/chromium'],
-                [path: 'allure-results/firefox']
-            ]
+            script {
+                def paths = (env.RUN_TAGS ?: '').tokenize(',').collect { [path: "allure-results/${it}"] }
+                if (paths) {
+                    allure includeProperties: false, results: paths
+                }
+            }
+            // E-mail the result: on any non-success build, and after every nightly run.
+            // Recipients come from the Jenkins global variable REPORT_RECIPIENTS (not from this repo).
+            // Needs the Email Extension plugin and SMTP configured in Jenkins; skipped if not set up.
+            script {
+                def to = env.REPORT_RECIPIENTS
+                def nightly = currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause')
+                if (to && (currentBuild.currentResult != 'SUCCESS' || nightly)) {
+                    try {
+                        def body = [
+                            "Result: ${currentBuild.currentResult}",
+                            "Runs: ${env.RUN_TAGS ?: 'none'}",
+                            "Build: ${env.BUILD_URL}",
+                            "Allure report: ${env.BUILD_URL}allure"
+                        ].join('\n')
+                        emailext to: to,
+                                 subject: "[${currentBuild.currentResult}] ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                                 body: body,
+                                 attachmentsPattern: 'html-report/*.html'
+                    } catch (err) {
+                        echo "Could not send the report e-mail: ${err.message}"
+                    }
+                }
+            }
         }
     }
 }
