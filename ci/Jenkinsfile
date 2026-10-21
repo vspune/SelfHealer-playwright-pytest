@@ -1,11 +1,13 @@
 // Multibranch pipeline (Script Path: ci/Jenkinsfile), Windows agent.
 //
-// Promotion pipeline: stages run in order and each runs ONLY if the previous one passed.
-//   QA (commit)      UAT  ->  PREPROD (nightly)
+// One stage per environment (QA, UAT, PREPROD). Each build runs the stage(s) chosen by its trigger;
+// moving a build from one environment to the next is a human step.
+//   QA (commit)      UAT (nightly)      PREPROD (manual, after a person deploys it)
 // Which stages run, by trigger (TARGET_ENV parameter = "auto"; each stage runs pytest with --env <name>):
 //   Commit (found by the job's 2-minute branch scan) -> QA
-//   Nightly cron (branch NIGHTLY_BRANCH)             -> UAT, then PREPROD only if UAT passed
-//   Manual "Build with Parameters"                   -> QA (or the single TARGET_ENV you pick)
+//   Nightly cron (branch NIGHTLY_BRANCH)             -> UAT only
+//   Manual "Build with Parameters"                   -> QA, or the TARGET_ENV you pick (PREPROD is run
+//                                                        this way once a person has deployed to PreProd)
 // Each environment runs its own tag (qa = smoke, uat / preprod = regression; see pytestFilters),
 // on Chromium and Firefox in parallel. A MARKER typed in "Build with Parameters" overrides the tag;
 // ROLE limits the run to one role.
@@ -14,15 +16,15 @@
 //   orangehrm-invalid-password                                  -> INVALID_PASSWORD
 //   orangehrm-valid-username / orangehrm-valid-password         -> QA_ADMIN_USERNAME / QA_ADMIN_PASSWORD
 //   orangehrm-uat-normal-username / -password                   -> UAT_NORMAL_USERNAME / UAT_NORMAL_PASSWORD
-//   orangehrm-preprod-normal-username / -password               -> PREPREPROD_NORMAL_USERNAME / PREPREPROD_NORMAL_PASSWORD
+//   orangehrm-preprod-normal-username / -password               -> PREPROD_NORMAL_USERNAME / PREPROD_NORMAL_PASSWORD
 
-def NIGHTLY_BRANCH = 'nightly'
+def NIGHTLY_BRANCH = 'master'   // the cron runs on this branch, so it always uses the latest merged tests
 
 // Environments to run for this build, in promotion order.
 def targetEnvs() {
     def chosen = params.TARGET_ENV ?: 'auto'
     if (chosen != 'auto') { return [chosen] }
-    if (currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause')) { return ['uat', 'preprod'] }
+    if (currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause')) { return ['uat'] }
     return ['qa']
 }
 
@@ -99,7 +101,7 @@ pipeline {
 
     parameters {
         choice(name: 'TARGET_ENV', choices: ['auto', 'qa', 'uat', 'preprod'],
-               description: 'auto = by trigger (commit: qa, nightly: uat > preprod, manual: qa). Or pick one environment.')
+               description: 'auto = by trigger (commit: qa, nightly: uat, manual: qa). Or pick one environment.')
         string(name: 'MARKER', defaultValue: '',
                description: 'pytest -m expression, e.g. smoke, regression, p0, "smoke and admin". Empty = qa: smoke, uat / preprod: regression')
         string(name: 'ROLE', defaultValue: '',

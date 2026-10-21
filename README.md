@@ -285,18 +285,20 @@ Note: `-m` filters on tags such as `smoke`; the `role` marker only selects the l
 One pipeline: `ci/Jenkinsfile`, used by a **multibranch pipeline** job on a **Windows** agent
 (Script Path `ci/Jenkinsfile`, source = this GitHub repo, branch scan every 2 minutes).
 
-Stages run in order and each runs **only if the previous one passed**.
+There is one stage per environment. Each build runs the stage chosen by its trigger; moving a build from one
+environment to the next is a **human step** (deployment is outside this pipeline).
 
 ```text
 Commit:   QA (smoke)
-Nightly:  UAT (regression)  ──pass──►  PREPROD (regression)
+Nightly:  UAT (regression)
+Manual:   PREPROD (regression), run after a person has deployed to PreProd
 ```
 
 | Trigger | Stages that run | Tag |
 |---|---|---|
 | Commit / push | `QA` | `smoke` |
-| Nightly cron (`nightly` branch, `H 2 * * *`, about 2 AM) | `UAT`, then `PREPROD` only if UAT passed | `regression` |
-| Manual **Build with Parameters** | `QA` only, or the single `TARGET_ENV` you pick | `MARKER` you type, or the environment's tag |
+| Nightly cron (`master` branch, `H 2 * * *`, about 2 AM) | `UAT` | `regression` |
+| Manual **Build with Parameters** | `QA`, or the `TARGET_ENV` you pick (e.g. `preprod` after a person deployed) | `MARKER` you type, or the environment's tag |
 
 Inside each stage the tests run on **Chromium and Firefox** in parallel.
 
@@ -305,11 +307,12 @@ Inside each stage the tests run on **Chromium and Firefox** in parallel.
   after the first build that runs this Jenkinsfile.
 - **Where the logic lives:** which environment runs, and its tag, is decided in `ci/Jenkinsfile`;
   each environment's URL and logins are only in `config.py`.
-- **Gating:** in the nightly run, `PREPROD` runs only if `UAT` passed (Jenkins stops after a failed stage).
-- **Deployment is not part of this pipeline.** A separate deploy pipeline (owned by the dev / DevOps
-  team) puts the build on QA, UAT and pre-prod. This pipeline only **verifies** an environment that is
-  already deployed. A deploy job can start it for a given environment with the `TARGET_ENV`
-  parameter, e.g. `curl -X POST -u <user>:<api-token> ".../job/SelfHealer-playwright-pytest/job/master/buildWithParameters?TARGET_ENV=qa"`.
+- **Promotion is a human step.** When UAT passes, a person (dev / release manager) deploys the build to
+  PreProd, then the PreProd tests are started with **Build with Parameters** → `TARGET_ENV=preprod`.
+- **Deployment is not part of this pipeline.** A separate process, owned by the dev / DevOps team,
+  puts the build on QA, UAT and PreProd. This pipeline only **verifies** an environment that is already
+  deployed. A deploy job can start it for a given environment with the `TARGET_ENV` parameter, e.g.
+  `curl -X POST -u <user>:<api-token> ".../job/SelfHealer-playwright-pytest/job/master/buildWithParameters?TARGET_ENV=preprod"`.
 - **No tests selected** (for example no test carries the tag) is not a failure.
 - Each run writes its own reports: `html-report/<env>-<browser>.html`,
   `allure-results/<env>-<browser>`, `junit/<env>-<browser>.xml`.
@@ -318,7 +321,9 @@ Inside each stage the tests run on **Chromium and Firefox** in parallel.
   `orangehrm-uat-normal-username` / `-password` → `UAT_NORMAL_USERNAME` / `UAT_NORMAL_PASSWORD`;
   `orangehrm-preprod-normal-username` / `-password` → `PREPROD_NORMAL_USERNAME` / `PREPROD_NORMAL_PASSWORD`.
   No `.env` is needed on the agent.
-- Change the cron branch name or time at the top of `ci/Jenkinsfile` (`NIGHTLY_BRANCH`, `cron(...)`).
+- **How a change reaches UAT:** a QA engineer pushes a branch (a commit run checks it on QA), it is
+  merged to `master`, and that night the cron on `master` runs the merged tests against UAT.
+- Change the cron branch or time at the top of `ci/Jenkinsfile` (`NIGHTLY_BRANCH`, `cron(...)`).
 - **Public repo:** in the Jenkins GitHub source, set trust for pull requests from forks to *Nobody*
   (or *Collaborators*), so a fork's Jenkinsfile can never run with your credentials.
 - Agent needs: Python 3.10+ on `PATH`, Git, and the Jenkins Allure plugin.
